@@ -5,7 +5,7 @@ type User={id:number;name:string;email:string};
 type Deck={id:number;name:string;description:string;color:string;cardCount:number;dueCount:number};
 type Card={id:number;deckId:number;front:string;back:string;example?:string|null;intervalDays:number;repetitions:number;dueAt?:string};
 type Stats={deckCount:number;cardCount:number;dueCount:number;reviewedToday:number;last7Days:Array<{day:string;count:number}>};
-const API=(import.meta.env.VITE_API_URL as string|undefined)??'http://localhost:4000/api';
+const API=(import.meta.env.VITE_API_URL as string|undefined)??'/api';
 
 async function request<T>(path:string,token:string|null,options:RequestInit={}):Promise<T>{
   const headers=new Headers(options.headers); if(token)headers.set('Authorization',`Bearer ${token}`);
