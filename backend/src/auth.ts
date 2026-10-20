@@ -9,14 +9,15 @@ const secret = () => {
 };
 
 export function signToken(user: AuthUser): string {
-  return jwt.sign({ email: user.email, name: user.name }, secret(), { subject: String(user.id), expiresIn: process.env.JWT_EXPIRES_IN ?? '7d' } as jwt.SignOptions);
+  return jwt.sign({ email: user.email, name: user.name }, secret(), { subject: String(user.id), issuer: 'vocabup-api', audience: 'vocabup-web', algorithm: 'HS256', expiresIn: process.env.JWT_EXPIRES_IN ?? '7d' } as jwt.SignOptions);
 }
 
 export function authenticate(req: AuthRequest, res: Response, next: NextFunction): void {
-  const header = req.header('authorization');
-  if (!header?.startsWith('Bearer ')) { res.status(401).json({ error: 'Vui lòng đăng nhập.' }); return; }
+  const cookieHeader = req.headers.cookie ?? '';
+  const token = cookieHeader.split(';').map(part => part.trim()).find(part => part.startsWith('vocabup_session='))?.slice('vocabup_session='.length);
+  if (!token) { res.status(401).json({ error: 'Vui lòng đăng nhập.' }); return; }
   try {
-    const payload = jwt.verify(header.slice(7), secret()) as jwt.JwtPayload;
+    const payload = jwt.verify(decodeURIComponent(token), secret(), { algorithms: ['HS256'], issuer: 'vocabup-api', audience: 'vocabup-web' }) as jwt.JwtPayload;
     const id = Number(payload.sub);
     if (!Number.isSafeInteger(id) || id < 1) throw new Error('Invalid subject');
     req.user = { id, email: String(payload.email), name: String(payload.name) };

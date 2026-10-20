@@ -1,0 +1,1 @@
+export const DEFAULT_DAILY_NEW_LIMIT = 20;
