@@ -1,82 +1,46 @@
 import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { ZodError } from 'zod';
-import { router } from './routes.js';
-import { pool } from './db.js';
+import { validateAuthConfig } from './auth.js';
+import { validateProductionConfig } from './config.js';
 
-const app = express();
-const allowedOrigins = (process.env.FRONTEND_URL ?? 'http://localhost:5173').split(',').map(value => value.trim()).filter(Boolean);
-const isAllowedOrigin = (origin: string) => {
-  if (allowedOrigins.includes(origin)) return true;
-  if (process.env.NODE_ENV === 'production') return false;
-  // ngrok free assigns a new HTTPS subdomain each time a tunnel is restarted.
-  try {
-    const url = new URL(origin);
-    return url.protocol === 'https:' && (
-      url.hostname.endsWith('.ngrok-free.app') ||
-      url.hostname.endsWith('.ngrok-free.dev')
-    );
-  } catch {
-    return false;
-  }
-};
-app.disable('x-powered-by');
-app.use(helmet({ contentSecurityPolicy: { directives: {
-  defaultSrc: ["'self'"], baseUri: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"],
-  scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], fontSrc: ["'self'", 'data:'], connectSrc: ["'self'"],
-  upgradeInsecureRequests: process.env.NODE_ENV === 'production' ? [] : null,
-} }, hsts: false }));
-if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
-app.use((req, res, next) => {
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
-  next();
-});
-app.use(cors({ origin(origin, callback) { callback(null, !origin || isAllowedOrigin(origin) ? (origin || false) : false); }, credentials: true, methods: ['GET','POST','PATCH','DELETE','OPTIONS'], allowedHeaders: ['Content-Type'], maxAge: 600 }));
-app.use('/api', (req, res, next) => {
-  res.setHeader('Cache-Control', 'private, no-store');
-  if (!['GET','HEAD','OPTIONS'].includes(req.method)) {
-    const origin = req.get('origin');
-    if (origin && !isAllowedOrigin(origin)) { res.status(403).json({ error: 'Origin không được phép.' }); return; }
-  }
-  next();
-});
-app.use(express.json({limit:'1mb'}));
-app.use('/api/auth',rateLimit({windowMs:15*60*1000,limit:30,standardHeaders:true,legacyHeaders:false}));
-app.get('/api/health',async(_req,res)=>{
-  try { await pool.query('SELECT 1'); res.json({status:'ok',database:'ok'}); }
-  catch { res.status(503).json({status:'error',database:'unavailable'}); }
-});
-app.use('/api',router);
-app.use('/api', (_req, res) => { res.status(404).json({ error: 'Không tìm thấy API endpoint.' }); });
-const frontendDist = resolve(dirname(fileURLToPath(import.meta.url)), '../../frontend/dist');
-if (process.env.NODE_ENV === 'production' && existsSync(frontendDist)) {
-  app.use(express.static(frontendDist, {
-    index: false,
-    setHeaders(res, filePath) {
-      const normalizedPath = filePath.replaceAll('\\', '/');
-      const isFingerprintedAsset = /\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\.[^/]+$/.test(normalizedPath);
-      res.setHeader('Cache-Control', isFingerprintedAsset ? 'public, max-age=31536000, immutable' : 'public, max-age=3600');
-    },
-  }));
-  app.get('/sitemap.xml', (_req, res) => {
-    res.status(404).type('text/plain').setHeader('Cache-Control', 'no-store');
-    res.end('Not found');
-  });
-  app.get(/.*/, (_req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(resolve(frontendDist, 'index.html')); });
+try {
+  validateProductionConfig();
+  validateAuthConfig();
+} catch (error) {
+  console.error(`[vocabup] ${(error as Error).message}`);
+  process.exit(1);
 }
-app.use((error:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{
-  if(error instanceof ZodError){res.status(400).json({error:'Dữ liệu không hợp lệ.',details:error.issues.map(i=>({path:i.path,message:i.message}))});return;}
-  if(error && typeof error==='object' && 'status' in error && Number(error.status) >= 400 && Number(error.status) < 500){const status=Number(error.status);res.status(status).json({error:status===413?'File vượt quá giới hạn 50 MB.':'Request không hợp lệ.'});return;}
-  if(error && typeof error==='object' && 'code' in error && error.code==='ER_DUP_ENTRY'){res.status(409).json({error:'Dữ liệu đã tồn tại.'});return;}
-  if(error && typeof error==='object' && 'code' in error && ['ER_ACCESS_DENIED_ERROR','ER_BAD_DB_ERROR','ECONNREFUSED','ETIMEDOUT'].includes(String(error.code))){res.status(503).json({error:'Không kết nối được MySQL. Hãy kiểm tra backend/.env và trạng thái database.'});return;}
-  console.error(error); res.status(500).json({error:'Đã có lỗi máy chủ.'});
+
+const { default: app } = await import('./app.js');
+const { pool } = await import('./db.js');
+const { REQUEST_TIMEOUT_MS } = await import('./config.js');
+const port = Number(process.env.PORT ?? 4000);
+const server = app.listen(port, () => {
+  console.log(`VocabUp API listening on http://localhost:${port}`);
 });
-const port=Number(process.env.PORT??4000);
-app.listen(port,()=>console.log(`VocabUp API listening on http://localhost:${port}`));
+// Large APKG/CSV uploads need a longer request window than Node's 5 minute default.
+server.requestTimeout = REQUEST_TIMEOUT_MS;
+server.headersTimeout = Math.min(60_000, REQUEST_TIMEOUT_MS);
+server.keepAliveTimeout = 65_000;
+let shuttingDown = false;
+
+function shutdown(signal: NodeJS.Signals): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[vocabup] ${signal} received; closing HTTP server and MySQL pool.`);
+  const forceCloseTimer = setTimeout(() => server.closeAllConnections(), 10_000);
+  forceCloseTimer.unref();
+  server.close(error => {
+    clearTimeout(forceCloseTimer);
+    if (error) {
+      console.error('[vocabup] HTTP server shutdown failed.', error);
+      process.exitCode = 1;
+    }
+    void pool.end().catch(poolError => {
+      console.error('[vocabup] MySQL pool shutdown failed.', poolError);
+      process.exitCode = 1;
+    });
+  });
+}
+
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);

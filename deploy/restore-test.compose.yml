@@ -1,0 +1,24 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${RESTORE_TEST_ROOT_PASSWORD:?Set a unique test-only password}
+      MYSQL_DATABASE: restore_bootstrap
+    volumes:
+      - vocabup_restore_test_mysql:/var/lib/mysql
+    networks:
+      - isolated_restore
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+networks:
+  isolated_restore:
+    internal: true
+
+volumes:
+  vocabup_restore_test_mysql:
+    name: vocabup_restore_test_mysql

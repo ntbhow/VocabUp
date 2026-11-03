@@ -1,0 +1,33 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: vocabup_test
+      MYSQL_USER: vocabup_test_app
+      MYSQL_PASSWORD: ${TEST_DB_PASSWORD:?Set a disposable TEST_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${TEST_MYSQL_ROOT_PASSWORD:?Set a disposable TEST_MYSQL_ROOT_PASSWORD}
+    volumes:
+      - vocabup_integration_test_mysql:/var/lib/mysql
+      - ./backend/migrations/001_initial.sql:/docker-entrypoint-initdb.d/001_initial.sql:ro
+      - ./deploy/mysql/test-runtime-privileges.sql:/docker-entrypoint-initdb.d/002_runtime_privileges.sql:ro
+    ports:
+      - "127.0.0.1:${TEST_MYSQL_HOST_PORT:-3308}:3306"
+    networks:
+      - integration_test
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  integration_test:
+
+volumes:
+  vocabup_integration_test_mysql:
+    name: vocabup_integration_test_mysql

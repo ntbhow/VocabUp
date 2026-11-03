@@ -1,0 +1,97 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: vocabup
+      DB_USER: vocabup_app
+      DB_PASSWORD: ${DB_PASSWORD:?Set a unique strong DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?Set a CSPRNG-generated JWT_SECRET}
+      FRONTEND_URL: ${FRONTEND_URL:?Set exact HTTPS origin(s), comma-separated}
+      TRUST_PROXY: ${TRUST_PROXY:?Set 1 only behind exactly one trusted reverse proxy, otherwise 0}
+      UPLOAD_DIR: /app/uploads
+      UPLOAD_TMP_DIR: /var/tmp/vocabup
+      APKG_MAX_SIZE_MB: ${APKG_MAX_SIZE_MB:-200}
+      CSV_MAX_SIZE_MB: ${CSV_MAX_SIZE_MB:-50}
+      IMAGE_MAX_SIZE_MB: ${IMAGE_MAX_SIZE_MB:-5}
+      PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
+      UNSPLASH_ACCESS_KEY: ${UNSPLASH_ACCESS_KEY:-}
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      FLICKR_API_KEY: ${FLICKR_API_KEY:-}
+      IMAGE_PROVIDERS: ${IMAGE_PROVIDERS:-pixabay,unsplash,pexels,wikimedia,openverse,flickr}
+      IMAGE_REQUEST_DELAY_MS: ${IMAGE_REQUEST_DELAY_MS:-650}
+      IMAGE_RETRY_INTERVAL_MINUTES: ${IMAGE_RETRY_INTERVAL_MINUTES:-360}
+      IMAGE_RETRY_BATCH: ${IMAGE_RETRY_BATCH:-100}
+    ports:
+      - "127.0.0.1:${APP_PORT:-4000}:4000"
+    volumes:
+      - vocabup_prod_uploads:/app/uploads
+      - vocabup_prod_tmp:/var/tmp/vocabup
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - backend_data
+      - proxy_ingress
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: vocabup
+      MYSQL_USER: vocabup_app
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set a unique strong DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set a unique MYSQL_ROOT_PASSWORD}
+    volumes:
+      - vocabup_prod_mysql:/var/lib/mysql
+      - ./backend/migrations/001_initial.sql:/docker-entrypoint-initdb.d/001_initial.sql:ro
+      - ./deploy/mysql/production-runtime-privileges.sql:/docker-entrypoint-initdb.d/002_runtime_privileges.sql:ro
+    networks:
+      - backend_data
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  backend_data:
+    internal: true
+  proxy_ingress:
+
+volumes:
+  vocabup_prod_mysql:
+    name: vocabup_prod_mysql
+  vocabup_prod_uploads:
+    name: vocabup_prod_uploads
+  vocabup_prod_tmp:
+    name: vocabup_prod_tmp

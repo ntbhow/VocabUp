@@ -1,0 +1,97 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: vocabup_staging
+      DB_USER: vocabup_staging_app
+      DB_PASSWORD: ${STAGING_DB_PASSWORD:?Set a unique staging DB password}
+      JWT_SECRET: ${STAGING_JWT_SECRET:?Set a CSPRNG-generated staging JWT secret}
+      FRONTEND_URL: ${STAGING_FRONTEND_URL:?Set exact HTTPS staging origin(s)}
+      TRUST_PROXY: ${STAGING_TRUST_PROXY:?Set 1 only behind exactly one trusted reverse proxy, otherwise 0}
+      UPLOAD_DIR: /app/uploads
+      UPLOAD_TMP_DIR: /var/tmp/vocabup
+      APKG_MAX_SIZE_MB: ${STAGING_APKG_MAX_SIZE_MB:-200}
+      CSV_MAX_SIZE_MB: ${STAGING_CSV_MAX_SIZE_MB:-50}
+      IMAGE_MAX_SIZE_MB: ${STAGING_IMAGE_MAX_SIZE_MB:-5}
+      PIXABAY_API_KEY: ${STAGING_PIXABAY_API_KEY:-}
+      UNSPLASH_ACCESS_KEY: ${STAGING_UNSPLASH_ACCESS_KEY:-}
+      PEXELS_API_KEY: ${STAGING_PEXELS_API_KEY:-}
+      FLICKR_API_KEY: ${STAGING_FLICKR_API_KEY:-}
+      IMAGE_PROVIDERS: ${STAGING_IMAGE_PROVIDERS:-pixabay,unsplash,pexels,wikimedia,openverse,flickr}
+      IMAGE_REQUEST_DELAY_MS: ${STAGING_IMAGE_REQUEST_DELAY_MS:-650}
+      IMAGE_RETRY_INTERVAL_MINUTES: ${STAGING_IMAGE_RETRY_INTERVAL_MINUTES:-360}
+      IMAGE_RETRY_BATCH: ${STAGING_IMAGE_RETRY_BATCH:-100}
+    ports:
+      - "127.0.0.1:${STAGING_APP_PORT:-4001}:4000"
+    volumes:
+      - vocabup_staging_uploads:/app/uploads
+      - vocabup_staging_tmp:/var/tmp/vocabup
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - staging_data
+      - staging_ingress
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: vocabup_staging
+      MYSQL_USER: vocabup_staging_app
+      MYSQL_PASSWORD: ${STAGING_DB_PASSWORD:?Set a unique staging DB password}
+      MYSQL_ROOT_PASSWORD: ${STAGING_MYSQL_ROOT_PASSWORD:?Set a unique staging root password}
+    volumes:
+      - vocabup_staging_mysql:/var/lib/mysql
+      - ./backend/migrations/001_initial.sql:/docker-entrypoint-initdb.d/001_initial.sql:ro
+      - ./deploy/mysql/staging-runtime-privileges.sql:/docker-entrypoint-initdb.d/002_runtime_privileges.sql:ro
+    networks:
+      - staging_data
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  staging_data:
+    internal: true
+  staging_ingress:
+
+volumes:
+  vocabup_staging_mysql:
+    name: vocabup_staging_mysql
+  vocabup_staging_uploads:
+    name: vocabup_staging_uploads
+  vocabup_staging_tmp:
+    name: vocabup_staging_tmp

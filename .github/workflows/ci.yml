@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-root-password
+          MYSQL_DATABASE: vocabup_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-only-root-password --silent"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - name: Backend typecheck and unit tests
+        run: |
+          npx tsc --noEmit -p backend/tsconfig.json
+          npm run test -w backend
+      - name: Migrate isolated MySQL test database
+        run: npm run db:migrate -w backend
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: vocabup_test
+          DB_USER: root
+          DB_PASSWORD: ci-only-root-password
+      - name: API integration tests
+        run: npm run test:integration -w backend
+        env:
+          RUN_API_INTEGRATION: '1'
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_NAME: vocabup_test
+          DB_USER: root
+          DB_PASSWORD: ci-only-root-password
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser E2E tests
+        run: npm run test:e2e
+        env:
+          E2E_DB_NAME: vocabup_test
+          E2E_DB_HOST: 127.0.0.1
+          E2E_DB_PORT: 3306
+          E2E_DB_USER: root
+          E2E_DB_PASSWORD: ci-only-root-password
+      - name: Upload browser reports and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: artifacts/playwright/
+          if-no-files-found: ignore
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npx tsc --noEmit -p frontend/tsconfig.json
+      - run: npm run build -w frontend

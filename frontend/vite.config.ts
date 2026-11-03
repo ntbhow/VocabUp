@@ -45,17 +45,29 @@ export default defineConfig(({ mode }) => {
     name: 'vocabup-production-csp',
     apply: 'build',
     transformIndexHtml() {
-      return [{ tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: `default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ${apiOrigin}` }, injectTo: 'head' }];
+      return [{ tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: `default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.pixabay.com https://images.unsplash.com https://plus.unsplash.com; font-src 'self' data:; connect-src 'self' ${apiOrigin}` }, injectTo: 'head' }];
     },
   }],
   server: {
     port: 5173,
-    headers: { 'X-Content-Type-Options': 'nosniff' },
+    headers: {
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'no-store',
+      //'Content-Security-Policy': "frame-ancestors 'none'",
+    },
     // ngrok's free ephemeral URL changes each time its tunnel restarts.
     // A leading dot allows any subdomain under this ngrok domain.
-    allowedHosts: ['.ngrok-free.app', 'moocher-structure-doorstop.ngrok-free.dev'],
+    allowedHosts: [
+      '.ngrok-free.app',
+      'moocher-structure-doorstop.ngrok-free.dev',
+      'vocab.lab.bhsex.vn',
+    ],
     proxy: {
       '/api': {
+        target: 'http://127.0.0.1:4000',
+        changeOrigin: true,
+      },
+      '/uploads': {
         target: 'http://127.0.0.1:4000',
         changeOrigin: true,
       },
