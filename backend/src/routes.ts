@@ -53,6 +53,17 @@ const positiveIntParam = (value: unknown, fallback: number, max: number): number
 };
 const deckSchema = z.object({ name: z.string().trim().min(1).max(120), description: z.string().max(500).optional().default(''), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().default('#6c63ff'), dailyNewLimit: z.number().int().min(0).max(500).optional().default(DEFAULT_DAILY_NEW_LIMIT), isPublic: z.boolean().optional() });
 const cardSchema = z.object({ front: z.string().trim().min(1).max(500), back: z.string().trim().min(1).max(5000), pronunciation: z.string().max(500).optional().default(''), translation: z.string().max(5000).optional().default(''), example: z.string().max(5000).optional().nullable() });
+// Zod 4 applies nested defaults even inside partial(). PATCH must preserve
+// omitted fields rather than replacing them with creation defaults.
+const deckUpdateSchema = deckSchema.partial().extend({
+  description: deckSchema.shape.description.removeDefault(),
+  color: deckSchema.shape.color.removeDefault(),
+  dailyNewLimit: deckSchema.shape.dailyNewLimit.removeDefault(),
+});
+const cardUpdateSchema = cardSchema.partial().extend({
+  pronunciation: cardSchema.shape.pronunciation.removeDefault(),
+  translation: cardSchema.shape.translation.removeDefault(),
+});
 
 router.post('/auth/register', asyncRoute(async (req, res) => {
   const data = z.object({ name: z.string().trim().min(1).max(100), email: z.email(), password: z.string().min(8).max(72) }).parse(req.body);
@@ -129,7 +140,7 @@ router.post('/decks', auth, asyncRoute(async (req, res) => {
   res.status(201).json({ id: deckId, ...d, isPublic: Boolean(d.isPublic), isFavorite: false, cardCount: 0, dueCount: 0 });
 }));
 router.patch('/decks/:deckId', auth, asyncRoute(async (req, res) => {
-  const d = deckSchema.partial().parse(req.body);
+  const d = deckUpdateSchema.parse(req.body);
   const [result] = await pool.execute('UPDATE decks SET name = COALESCE(?, name), description = COALESCE(?, description), color = COALESCE(?, color), daily_new_limit = COALESCE(?, daily_new_limit), is_public = COALESCE(?, is_public) WHERE id = ? AND user_id = ?', [d.name ?? null, d.description ?? null, d.color ?? null, d.dailyNewLimit ?? null, d.isPublic === undefined ? null : (d.isPublic ? 1 : 0), routeParam(req.params.deckId), userId(req)]);
   if (!(result as {affectedRows:number}).affectedRows) { res.status(404).json({error:'Không tìm thấy bộ từ.'}); return; }
   await touchUserActivity(userId(req));
@@ -252,8 +263,8 @@ router.post('/decks/:deckId/cards', auth, asyncRoute(async (req, res) => {
   res.status(201).json({ id: cardId, deckId: Number(routeParam(req.params.deckId)), ...d, ...(await cardImageFields(cardId)), intervalDays: 0, repetitions: 0, easeFactor: 2.5 });
 }));
 router.patch('/cards/:cardId', auth, asyncRoute(async (req, res) => {
-  const d = cardSchema.partial().parse(req.body);
-  const [result] = await pool.execute(`UPDATE cards c JOIN decks d ON d.id=c.deck_id SET c.front=COALESCE(?,c.front), c.back=COALESCE(?,c.back), c.pronunciation=COALESCE(?,c.pronunciation), c.translation=COALESCE(?,c.translation), c.example=COALESCE(?,c.example) WHERE c.id=? AND d.user_id=?`, [d.front ?? null,d.back ?? null,d.pronunciation ?? null,d.translation ?? null,d.example ?? null,routeParam(req.params.cardId),userId(req)]);
+  const d = cardUpdateSchema.parse(req.body);
+  const [result] = await pool.execute(`UPDATE cards c JOIN decks d ON d.id=c.deck_id SET c.front=COALESCE(?,c.front), c.back=COALESCE(?,c.back), c.pronunciation=COALESCE(?,c.pronunciation), c.translation=COALESCE(?,c.translation), c.example=CASE WHEN ? THEN ? ELSE c.example END WHERE c.id=? AND d.user_id=?`, [d.front ?? null,d.back ?? null,d.pronunciation ?? null,d.translation ?? null,d.example !== undefined,d.example ?? null,routeParam(req.params.cardId),userId(req)]);
   if (!(result as {affectedRows:number}).affectedRows) { res.status(404).json({error:'Không tìm thấy từ.'}); return; }
   await touchUserActivity(userId(req));
   await recordActivity({ actorUserId: userId(req), actorRole: req.user!.role, action: 'card.update', targetType: 'card', targetId: Number(routeParam(req.params.cardId)), ip: clientIp(req) });

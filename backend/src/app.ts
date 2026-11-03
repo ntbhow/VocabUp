@@ -42,7 +42,7 @@ app.use((req, res, next) => {
   if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
   next();
 });
-app.use(cors({ origin(origin, callback) { callback(null, !origin || isAllowedOrigin(origin) ? (origin || false) : false); }, credentials: true, methods: ['GET','POST','PATCH','DELETE','OPTIONS'], allowedHeaders: ['Content-Type'], maxAge: 600 }));
+app.use(cors({ origin(origin, callback) { callback(null, !origin || isAllowedOrigin(origin) ? (origin || false) : false); }, credentials: true, methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'], allowedHeaders: ['Content-Type'], maxAge: 600 }));
 app.use('/api', (req, res, next) => {
   res.setHeader('Cache-Control', 'private, no-store');
   if (!['GET','HEAD','OPTIONS'].includes(req.method)) {

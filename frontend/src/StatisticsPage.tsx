@@ -65,31 +65,38 @@ export function StatisticsPage({ onOpenDeck }: { onOpenDeck: (deckId: number) =>
   const [dayDetail, setDayDetail] = useState<{ day: string; newCount: number; reviewCount: number } | null>(null);
   const ready = useRef(false);
   const saveTimer = useRef<number | null>(null);
+  const analysisRequest = useRef(0);
 
   const loadAnalysis = useCallback(async (current: StatsPreferences, fromKey?: string, toKey?: string) => {
+    const requestId = ++analysisRequest.current;
     setBusy(true); setError('');
     try {
-      setAnalysis(await statsApi.analysis({
+      const next = await statsApi.analysis({
         range: current.range,
         from: current.range === 'custom' ? fromKey : undefined,
         to: current.range === 'custom' ? toKey : undefined,
         decks: current.decks,
         bucket: current.bucket,
-      }));
-    } catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+      });
+      if (requestId === analysisRequest.current) setAnalysis(next);
+    } catch (e) { if (requestId === analysisRequest.current) setError((e as Error).message); }
+    finally { if (requestId === analysisRequest.current) setBusy(false); }
   }, []);
 
   useEffect(() => {
+    let active = true;
     void (async () => {
       try {
         const saved = await statsApi.preferences();
+        if (!active) return;
         setPrefs(saved);
         await loadAnalysis(saved, from || undefined, to || undefined);
       } catch {
+        if (!active) return;
         await loadAnalysis(DEFAULT_PREFERENCES);
-      } finally { ready.current = true; }
+      } finally { if (active) ready.current = true; }
     })();
+    return () => { active = false; ready.current = false; analysisRequest.current++; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
