@@ -13,6 +13,9 @@ staging.*.env
 *.sql.age
 *.sql.gz
 *.dump
+*.sql
+!backend/migrations/*.sql
+!deploy/mysql/*.sql
 *.backup
 artifacts/playwright/
 /backups/
