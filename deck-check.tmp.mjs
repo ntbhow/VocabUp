@@ -1,0 +1,22 @@
+﻿import { config } from 'dotenv';
+config({ path: 'backend/.env' });
+import mysql from 'mysql2/promise';
+const BASE = 'http://127.0.0.1:4100/api';
+const api = async (path, opts = {}) => {
+  const res = await fetch(BASE + path, { ...opts, headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+  const text = await res.text();
+  return { status: res.status, body: text ? JSON.parse(text) : null, cookie: res.headers.getSetCookie?.() ?? [] };
+};
+const db = await mysql.createConnection({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: process.env.DB_USER, password: process.env.DB_PASSWORD, database: process.env.DB_NAME });
+const suffix = Date.now().toString(36);
+const reg = await api('/auth/register', { method: 'POST', body: JSON.stringify({ email: `deckchk-${suffix}@example.test`, password: 'Test12345!', name: 'deckchk' }) });
+const H = { Cookie: reg.cookie.find(c => c.startsWith('vocabup_session='))?.split(';')[0] ?? '' };
+const deck = (await api('/decks', { method: 'POST', headers: H, body: JSON.stringify({ name: `Deck check ${suffix}` }) })).body.id;
+const c1 = (await api(`/decks/${deck}/cards`, { method: 'POST', headers: H, body: JSON.stringify({ front: 'xx', back: 'x' }) })).body.id;
+const c2 = (await api(`/decks/${deck}/cards`, { method: 'POST', headers: H, body: JSON.stringify({ front: 'yy', back: 'y' }) })).body.id;
+const review = (id, rating) => api(`/study/${id}/review`, { method: 'POST', headers: H, body: JSON.stringify({ rating }) });
+await review(c1, 0); await review(c1, 2); await review(c1, 2); await review(c2, 2);
+const d = (await api(`/decks/${deck}/stats`, { headers: H })).body;
+console.log(JSON.stringify({ deckDetail: { status: (await api(`/decks/${deck}/stats`, { headers: H })).status, todayNew: d.today.newCount, todayReview: d.today.reviewCount, last7New: d.last7.newCount, learned: d.learned, total: d.totalCards, progress: d.progress } }, null, 1));
+await db.query('DELETE FROM users WHERE email = ?', [`deckchk-${suffix}@example.test`]);
+await db.end();

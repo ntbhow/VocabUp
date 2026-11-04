@@ -18,6 +18,11 @@ export default function App() {
   const [dataLoaded, setDataLoaded] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>(initialPath === '/register' ? 'register' : 'login');
   const [authBusy, setAuthBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const saveLock = useRef(false);
+  const reviewLock = useRef(false);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [deckQuery, setDeckQuery] = useState('');
   const [error, setError] = useState('');
   const [decks, setDecks] = useState<Deck[]>([]);
   const [stats, setStats] = useState<Stats>({ deckCount: 0, cardCount: 0, dueCount: 0, reviewedToday: 0, newToday: 0, learnedCount: 0, matureCount: 0, retentionRate: null, retentionSample: 0, streak: 0, last7Days: [], studyDate: '', timeZone: 'Asia/Ho_Chi_Minh' });
@@ -33,6 +38,7 @@ export default function App() {
   const [cardsOffset, setCardsOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [cardsLoading, setCardsLoading] = useState(false);
+  const cardsRequest = useRef(0);
 
   const initialTab: 'home' | 'decks' | 'study' | 'stats' | 'user' = initialPath === '/user' ? 'user' : initialPath === '/statistics' || initialPath === '/statics' ? 'stats' : initialPath === '/study' || initialPath.includes('/study') ? 'study' : initialPath.startsWith('/decks') ? 'decks' : 'home';
   const [tab, setTabRaw] = useState<'home' | 'decks' | 'study' | 'stats' | 'user'>(initialTab);
@@ -82,11 +88,28 @@ export default function App() {
     if (trigger && document.contains(trigger)) trigger.focus?.();
   }, [modal, settingsOpen]);
 
+  // Keep keyboard focus inside the active dialog, including portaled confirmations.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const dialogs = [...document.querySelectorAll<HTMLElement>('[aria-modal="true"]')];
+      const dialog = dialogs.at(-1);
+      if (!dialog) return;
+      const items = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"], a[href]')].filter(el => el.getClientRects().length);
+      const first = items[0], last = items.at(-1);
+      if (!first || !last) return;
+      if (!dialog.contains(document.activeElement) || (event.shiftKey && document.activeElement === first)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
   useEffect(() => () => { if (toastTimer.current) window.clearTimeout(toastTimer.current); }, []);
 
   const setTab = (next: 'home' | 'decks' | 'study' | 'stats' | 'user') => {
     setTabRaw(next);
-    const path = next === 'home' ? '/dashboard' : next === 'decks' ? '/decks' : next === 'study' ? (activeDeck ? `/decks/${activeDeck}/study` : '/study') : '/statics';
+    const path = next === 'home' ? '/dashboard' : next === 'decks' ? '/decks' : next === 'study' ? (activeDeck ? `/decks/${activeDeck}/study` : '/study') : next === 'user' ? '/user' : '/statistics';
     if (window.location.pathname !== path) window.history.pushState({}, '', path);
   };
 
@@ -127,15 +150,17 @@ export default function App() {
 
   async function loadCards(deckId: number, searchTerm: string, offset: number, reset: boolean) {
     if (!token) return;
+    const requestId = ++cardsRequest.current;
     setCardsLoading(true);
     try {
       const page = await request<CardPage>(`/decks/${deckId}/cards?search=${encodeURIComponent(searchTerm)}&limit=${CARDS_PAGE_SIZE}&offset=${offset}`, token);
+      if (requestId !== cardsRequest.current) return;
       if (reset) setCards(page.cards); else setCards(prev => [...prev, ...page.cards]);
       setCardsTotal(page.total);
       setCardsOffset(offset + page.cards.length);
       setHasMore(offset + page.cards.length < page.total);
     } catch (e) { setError((e as Error).message); }
-    finally { setCardsLoading(false); }
+    finally { if (requestId === cardsRequest.current) setCardsLoading(false); }
   }
 
   useEffect(() => {
@@ -144,7 +169,7 @@ export default function App() {
     const t = window.setTimeout(() => {
       void loadCards(activeDeck, search, 0, true);
     }, 250);
-    return () => window.clearTimeout(t);
+    return () => { window.clearTimeout(t); cardsRequest.current++; };
   }, [token, activeDeck, search]);
 
   const activeJobId = imageJob?.id;
@@ -220,7 +245,8 @@ export default function App() {
   function openEditDeck(deck: Deck) { rememberTrigger(); setEditingDeck(deck); setDeckName(deck.name); setDeckDesc(deck.description); setDeckColor(deck.color); setDeckPublic(Boolean(deck.isPublic)); setModal('deck'); }
 
   async function saveDeck(e: FormEvent) {
-    e.preventDefault(); if (!token) return;
+    e.preventDefault(); if (!token || saveLock.current) return;
+    saveLock.current = true; setSaving(true);
     try {
       if (editingDeck) {
         await request(`/decks/${editingDeck.id}`, token, { method: 'PATCH', body: JSON.stringify({ name: deckName, description: deckDesc, color: deckColor, isPublic: deckPublic }) });
@@ -234,13 +260,15 @@ export default function App() {
       setModal(null); setEditingDeck(null); setDeckName(''); setDeckDesc(''); setDeckColor(colors[0]!); setDeckPublic(false);
       void refresh(token);
     } catch (e) { setError((e as Error).message); }
+    finally { saveLock.current = false; setSaving(false); }
   }
 
   function openNewCard() { rememberTrigger(); setEditingCard(null); setFront(''); setBack(''); setPronunciation(''); setTranslation(''); setExample(''); setModal('card'); }
   function openEditCard(c: Card) { rememberTrigger(); setEditingCard(c); setFront(c.front); setBack(c.back); setPronunciation(c.pronunciation ?? ''); setTranslation(c.translation ?? ''); setExample(c.example ?? ''); setModal('card'); }
 
   async function saveCard(e: FormEvent) {
-    e.preventDefault(); if (!token || !activeDeck) return;
+    e.preventDefault(); if (!token || !activeDeck || saveLock.current) return;
+    saveLock.current = true; setSaving(true);
     const body = JSON.stringify({ front, back, pronunciation, translation, example: example || null });
     try {
       if (editingCard) { await request(`/cards/${editingCard.id}`, token, { method: 'PATCH', body }); notify('Đã cập nhật từ.'); }
@@ -249,6 +277,7 @@ export default function App() {
       void loadCards(activeDeck, search, 0, true);
       void refresh(token);
     } catch (e) { setError((e as Error).message); }
+    finally { saveLock.current = false; setSaving(false); }
   }
 
   function deleteCard(card: Card) {
@@ -325,7 +354,7 @@ export default function App() {
       const result = await request<Card[]>(`/study/due${deckId ? `?deckId=${deckId}` : ''}`, token);
       const due = deckId ? result.filter(card => Number(card.deckId) === deckId) : result;
       setDueCards(due); setStudyTotal(due.length); setStudyCard(due[0] ?? null); setRevealed(false);
-      if (deckId) setActiveDeck(deckId);
+      setActiveDeck(deckId ?? null);
       setTabRaw('study');
       const studyPath = deckId ? `/decks/${deckId}/study` : '/study';
       if (window.location.pathname !== studyPath) window.history.pushState({}, '', studyPath);
@@ -383,7 +412,8 @@ export default function App() {
   }, [token]);
 
   async function review(rating: number) {
-    if (!token || !studyCard) return;
+    if (!token || !studyCard || reviewLock.current) return;
+    reviewLock.current = true; setReviewBusy(true);
     try {
       const schedule = await request<{ intervalMinutes: number; repetitions: number }>(`/study/${studyCard.id}/review`, token, { method: 'POST', body: JSON.stringify({ rating }) });
       const rest = dueCards.slice(1);
@@ -396,10 +426,12 @@ export default function App() {
       if (tab === 'stats') void loadLearning();
       if (tab === 'decks' && activeDeck) void loadDeckStats(activeDeck);
     } catch (e) { setError((e as Error).message); }
+    finally { reviewLock.current = false; setReviewBusy(false); }
   }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (mobileNav && e.key === 'Escape') { setMobileNav(false); document.querySelector<HTMLButtonElement>('.mobile-menu')?.focus(); return; }
       if (modal || settingsOpen || confirmState || importPreview || (imageJob && !jobMinimized)) {
         if (e.key === 'Escape') {
           if (importPreview) { if (!importBusy) { setImportPreview(null); setImportDeck(null); } }
@@ -532,13 +564,7 @@ export default function App() {
             <div className="eyebrow light"><Sparkles size={14} /> TỪ VỰNG MỖI NGÀY</div>
             <h1>Mỗi từ mới,<br /> một cánh cửa<br /> <em>mở ra.</em></h1>
             <p>Học ngoại ngữ theo cách của bạn. Những phiên ôn ngắn, đều đặn sẽ tạo nên khác biệt lớn.</p>
-            <div className="orbit">
-              <div className="orbit-center"><BookOpen size={32} /></div>
-              <span className="orbit-word w1">serendipity</span>
-              <span className="orbit-word w2">nỗ lực</span>
-              <span className="orbit-word w3">bonjour</span>
-              <span className="orbit-word w4">curiosity</span>
-            </div>
+            <div className="word-specimen"><span>WORD / TỪ VỰNG</span><strong>curiosity</strong><small>/ˌkjʊriˈɒsəti/ · danh từ</small><p>Sự tò mò — nơi mọi hành trình học hỏi bắt đầu.</p></div>
           </div>
           <div className="auth-foot">Học một chút. Tiến bộ mỗi ngày. <span>✦</span></div>
         </section>
@@ -550,8 +576,8 @@ export default function App() {
             <form className="form-stack" onSubmit={submitAuth}>
               {authMode === 'register' && <label>Họ và tên<input name="name" placeholder="Ví dụ: Minh Anh" required minLength={1} maxLength={100} /></label>}
               <label>Email<input name="email" type="email" placeholder="ban@email.com" required autoComplete="email" /></label>
-              <label>Mật khẩu<input name="password" type="password" placeholder="Ít nhất 8 ký tự" required minLength={authMode === 'register' ? 8 : 1} autoComplete={authMode === 'register' ? 'new-password' : 'current-password'} /></label>
-              {error && <div className="error-box">{error}</div>}
+              <label>Mật khẩu<input name="password" type="password" placeholder={authMode === 'register' ? 'Ít nhất 8 ký tự' : 'Nhập mật khẩu'} required minLength={authMode === 'register' ? 8 : 1} autoComplete={authMode === 'register' ? 'new-password' : 'current-password'} /></label>
+              {error && <div className="error-box" role="alert">{error}</div>}
               <button className="button primary full" disabled={authBusy}>{authBusy ? 'Đang xử lý…' : authMode === 'login' ? 'Đăng nhập' : 'Tạo tài khoản'} <ChevronRight size={17} /></button>
             </form>
             <div className="switch-auth">{authMode === 'login' ? 'Chưa có tài khoản?' : 'Đã có tài khoản?'} <button onClick={() => { const mode = authMode === 'login' ? 'register' : 'login'; setAuthMode(mode); setError(''); window.history.pushState({}, '', `/${mode}`); }}>{authMode === 'login' ? 'Đăng ký' : 'Đăng nhập'}</button></div>
@@ -578,7 +604,7 @@ export default function App() {
         <div className="side-label">MENU</div>
         <nav>
           {navItems.map(n => (
-            <button key={n.id} className={`nav-link ${tab === n.id ? 'selected' : ''}`} onClick={() => { setMobileNav(false); if (n.id === 'study') { void startStudy(); return; } if (n.id === 'decks') { setActiveDeck(null); setCards([]); } setTab(n.id); }}>
+            <button key={n.id} aria-current={tab === n.id ? 'page' : undefined} className={`nav-link ${tab === n.id ? 'selected' : ''}`} onClick={() => { setMobileNav(false); if (n.id === 'study') { void startStudy(); return; } if (n.id === 'decks') { setActiveDeck(null); setCards([]); } setTab(n.id); }}>
               {n.icon}<span>{n.label}</span>{n.badge ? <b className="nav-badge">{n.badge}</b> : null}
             </button>
           ))}
@@ -588,14 +614,14 @@ export default function App() {
         <div className="side-label side-label-row">BỘ TỪ GẦN ĐÂY <button className="icon-button tiny" onClick={openCreateDeck} aria-label="Tạo bộ từ"><Plus size={15} /></button></div>
         <div className="sidebar-decks">
           {decks.slice(0, 5).map(d => (
-            <button key={d.id} className="deck-shortcut" onClick={() => { setMobileNav(false); void startStudy(d.id); }}><i style={{ background: d.color }} />{d.name}<span>{d.cardCount}</span></button>
+            <button key={d.id} className="deck-shortcut" onClick={() => { setMobileNav(false); openDeckLibrary(d); }}><i style={{ background: d.color }} />{d.name}<span>{d.cardCount}</span></button>
           ))}
           {!decks.length && <div className="empty-sidebar">Chưa có bộ từ nào.</div>}
         </div>
         <div className="side-label side-label-row"><span className="side-label-title">BỘ TỪ YÊU THÍCH <Star size={11} fill="currentColor" className="side-favorite-star" /></span></div>
         <div className="sidebar-favorites">
           {favoriteDecks.length ? favoriteDecks.map(d => (
-            <button key={d.id} className="deck-shortcut" onClick={() => { setMobileNav(false); void startStudy(d.id); }}>
+            <button key={d.id} className="deck-shortcut" onClick={() => { setMobileNav(false); openDeckLibrary(d); }}>
               <i className="favorite-dot" style={{ background: d.color }} />{d.name}<span>{d.cardCount}</span>
             </button>
           )) : <div className="empty-sidebar">Chưa có bộ từ yêu thích</div>}
@@ -604,9 +630,10 @@ export default function App() {
         <button className="profile" onClick={() => window.location.assign('/user')}><Avatar user={user} /><div className="profile-copy"><strong>{user.name}</strong><span>{user.email}</span></div><LogOut size={16} className="logout" /></button>
       </aside>
       {mobileNav && <button className="mobile-scrim" onClick={() => setMobileNav(false)} aria-label="Đóng menu" />}
-      <main className="main-area">
+      <a className="skip-link" href="#main-content">Đến nội dung chính</a>
+      <main className="main-area" id="main-content" tabIndex={-1}>
         <header className="topbar">
-          <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Mở menu"><Menu size={20} /></button>
+          <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Mở menu" aria-expanded={mobileNav}><Menu size={20} /></button>
           <div className="crumb">Không gian học tập <ChevronRight size={14} /><span>{tab === 'user' ? 'Hồ sơ cá nhân' : tab === 'home' ? 'Tổng quan' : tab === 'decks' ? 'Bộ từ' : tab === 'study' ? (selectedDeck?.name ?? 'Ôn tập') : 'Thống kê'}</span></div>
           <div className="top-actions">
             <span className="today-pill"><span /> Học một chút hôm nay</span>
@@ -614,7 +641,7 @@ export default function App() {
           </div>
         </header>
         <div className="page-content">
-          <div className="page-anim" key={`${tab}:${activeDeck ?? 0}`}>
+          <div className={`page-anim page-${tab}`} key={`${tab}:${activeDeck ?? 0}`}>
 
           {tab === 'user' && <ProfilePage user={user} onUpdate={setUser} onSettings={() => setSettingsOpen(true)} />}
           {tab === 'home' && (
@@ -623,7 +650,7 @@ export default function App() {
                 <div>
                   <div className="eyebrow"><span className="eyebrow-dot" /> {formatTodayLabel()}</div>
                   <h1>Chào {firstName} <span className="wave">✦</span></h1>
-                  <p className="muted">Một chút tiến bộ hôm nay sẽ tạo nên điều tuyệt vời.</p>
+                  <p className="muted">Không gian nhỏ cho những điều bạn muốn ghi nhớ.</p>
                 </div>
                 <button className="button primary" onClick={openCreateDeck}><Plus size={17} /> Tạo bộ từ</button>
               </div>
@@ -634,18 +661,11 @@ export default function App() {
                     {stats.streak > 0 && <span className="hero-streak"><Flame size={13} /> Chuỗi {stats.streak} ngày</span>}
                     <span className="hero-due"><RotateCcw size={13} /><strong>{stats.dueCount}</strong> Từ đến hạn</span>
                   </div>
-                  <h2>Sẵn sàng làm mới<br />trí nhớ của bạn?</h2>
+                  <h2>{!decks.length ? 'Bắt đầu từ một từ mới.' : stats.dueCount ? 'Một chút ôn tập. Nhớ lâu hơn.' : 'Hôm nay, bạn đã bắt kịp.'}</h2><p>{!decks.length ? 'Tạo bộ từ theo chủ đề, thêm từ hoặc nhập file CSV / Anki để bắt đầu.' : stats.dueCount ? 'Nhớ lại trước khi lật thẻ. Chọn mức độ ghi nhớ để lên lịch ôn tiếp theo.' : 'Khám phá thư viện hoặc thêm những từ bạn muốn học tiếp.'}</p>
 
-                  <button className="button hero-button" onClick={() => void startStudy()}><Sparkles size={16} /> Bắt đầu ôn tập <ChevronRight size={16} /></button>
+                  <button className="button hero-button" onClick={() => !decks.length ? openCreateDeck() : stats.dueCount ? void startStudy() : setTab('decks')}><BookOpen size={16} />{!decks.length ? 'Tạo bộ từ đầu tiên' : stats.dueCount ? 'Bắt đầu ôn tập' : 'Khám phá bộ từ'}<ChevronRight size={16} /></button>
                 </div>
-                <div className="hero-art">
-                  <div className="hero-sun" />
-                  <div className="hero-card-float float-back"><span>remember</span><small>/ rɪˈmembər /</small></div>
-                  <div className="hero-card-float float-front"><span>記憶</span><small>trí nhớ · ký ức</small></div>
-                  <div className="hero-spark s1">✳</div>
-                  <div className="hero-spark s2">✦</div>
-                  <div className="hero-plant">✺</div>
-                </div>
+                <div className="session-note" aria-hidden="true"><span>GHI NHỚ MỖI NGÀY</span><strong>Học một chút.<br />Giữ lại thật lâu.</strong><BookOpen size={36} strokeWidth={1.25} /></div>
 
               </div>
               <div className="section-heading"><div><h3>Tiến độ của bạn</h3><p>Những bước nhỏ dẫn đến thành quả lớn.</p></div><button className="text-button" onClick={() => setTab('stats')}>Xem thống kê <ChevronRight size={15} /></button></div>
@@ -656,7 +676,7 @@ export default function App() {
                 <StatCard label="HÔM NAY" value={stats.reviewedToday} icon={<CalendarClock size={17} />} tint="green" caption="Lượt ôn hôm nay" />
               </div>
               <div className="section-heading deck-heading"><div><h3>Bộ từ của bạn</h3><p>Mở một bộ từ để tiếp tục khám phá.</p></div><button className="text-button" onClick={() => setTab('decks')}>Tất cả bộ từ <ChevronRight size={15} /></button></div>
-              <DeckGrid decks={decks.slice(0, 3)} onOpen={d => void startStudy(d.id)} onStudy={d => void startStudy(d.id)} onToggleFavorite={toggleFavorite} favoriteBusy={favoritePending} onImages={undefined} onCreate={openCreateDeck} onDelete={deleteDeck} onEdit={openEditDeck} onSetDailyNewLimit={setDeckDailyNewLimit} onLibrary={openDeckLibrary} onImport={(deck, file) => void startImportPreview(deck, file)} />
+              <DeckGrid decks={decks.slice(0, 3)} onOpen={openDeckLibrary} onStudy={d => void startStudy(d.id)} onToggleFavorite={toggleFavorite} favoriteBusy={favoritePending} onImages={undefined} onCreate={openCreateDeck} onDelete={deleteDeck} onEdit={openEditDeck} onSetDailyNewLimit={setDeckDailyNewLimit} onLibrary={openDeckLibrary} onImport={(deck, file) => void startImportPreview(deck, file)} />
             </>
           )}
 
@@ -670,11 +690,13 @@ export default function App() {
                 </div>
                 <button className="button primary" onClick={openCreateDeck}><Plus size={17} /> Tạo bộ từ</button>
               </div>
+              {!selectedDeck && <div className="library-search"><label className="search-box"><Search size={18} /><input aria-label="Tìm bộ từ" placeholder="Tìm theo tên hoặc chủ đề…" value={deckQuery} onChange={e => setDeckQuery(e.target.value)} /></label>{deckQuery && <button className="text-button" onClick={() => setDeckQuery('')}>Xóa tìm kiếm</button>}<span>{decks.length} bộ từ</span></div>}
               {selectedDeck ? (
                 <>
                   <div className="deck-toolbar">
-                    <button className="text-button" onClick={() => setActiveDeck(null)}><ChevronLeft size={16} /> Tất cả bộ từ</button>
+                    <button className="text-button" onClick={() => { setActiveDeck(null); setSearch(''); setTab('decks'); }}><ChevronLeft size={16} /> Tất cả bộ từ</button>
                     <div className="toolbar-actions">
+                      <button className="button primary" onClick={() => void startStudy(selectedDeck.id)}><BookOpen size={16} /> Ôn tập</button>
                       <label className="button secondary upload-button" title={`CSV tối đa ${uploadLimits?.csvMaxMB ?? 50} MB · APKG tối đa ${uploadLimits?.apkgMaxMB ?? 200} MB`}><Upload size={16} /> Nhập CSV / APKG<input type="file" accept=".csv,.apkg,text/csv,application/octet-stream" onChange={importCsv} /></label>
                       <button className="button secondary" onClick={() => void exportCsv()}><CloudUpload size={16} /> Xuất CSV</button>
                       <button className="button secondary" onClick={() => openEditDeck(selectedDeck)}><Plus size={15} /> Sửa bộ từ</button>
@@ -682,7 +704,7 @@ export default function App() {
                       <button className="button primary" onClick={openNewCard}><Plus size={16} /> Thêm từ</button>
                     </div>
                   </div>
-                  <section className="deck-learning">
+                  <details className="deck-learning"><summary>Tiến độ học tập của bộ từ</summary>
                     <div className="section-heading"><div><h3>Thống kê học tập của bộ từ này</h3><p>Chỉ tính các từ thuộc bộ {selectedDeck.name}.</p></div></div>
                     {deckStats ? (
                       <>
@@ -700,8 +722,8 @@ export default function App() {
                         </div>
                       </>
                     ) : <div className="learning-skeleton"><span className="skel" /><span className="skel" /><span className="skel" /><span className="skel" /></div>}
-                  </section>
-                  <div className="card-list-head"><strong>{cardsTotal} từ</strong><div className="search-box"><Search size={15} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Tìm từ vựng…" /></div></div>
+                  </details>
+                  <div className="card-list-head"><strong>{cardsTotal} từ</strong><div className="search-box"><Search size={15} /><input value={search} onChange={e => setSearch(e.target.value)} aria-label="Tìm từ vựng" placeholder="Tìm từ vựng…" /></div></div>
                   {cardsLoading && !cards.length ? (
                     <div className="vocab-table">
                       {Array.from({ length: 6 }).map((_, i) => (
@@ -715,13 +737,13 @@ export default function App() {
                         <div className="vocab-row" key={c.id}>
                           <div className="vocab-term">
                             <div className="vocab-term-head">
-                              <img className="vocab-thumb" src={c.imageThumbnailUrl || c.imageUrl || undefined} alt="" loading="lazy" decoding="async" onError={e => { e.currentTarget.style.display = 'none'; }} />
+                              {(c.imageThumbnailUrl || c.imageUrl) && <img className="vocab-thumb" src={c.imageThumbnailUrl || c.imageUrl || undefined} alt="" loading="lazy" decoding="async" onError={e => { e.currentTarget.style.display = 'none'; }} />}
                               <strong>{c.front}</strong>
                               <button type="button" className="speak-button tiny" title="Phát âm" aria-label={`Phát âm ${c.front}`} onClick={() => speak(c.front)}><Volume2 size={14} /></button>
                             </div>
                             {c.pronunciation && <small>{c.pronunciation}</small>}
                           </div>
-                          <span className="vocab-meaning"><b>{c.translation || c.back}</b>{c.translation && c.back && <small><i>English</i> {c.back}</small>}</span>
+                          <span className="vocab-meaning"><b>{c.translation || c.back}</b>{c.translation && c.back && <small><i>Tiếng Anh</i> {c.back}</small>}</span>
                           <span className="due-cell">{c.intervalDays ? `${c.intervalDays} ngày` : 'Chưa ôn'}</span>
                           <div className="row-actions">
                             <button className="icon-button tiny" title="Sửa" onClick={() => openEditCard(c)}>✎</button>
@@ -746,7 +768,7 @@ export default function App() {
                   )}
                 </>
               ) : (
-                <DeckGrid decks={decks} onOpen={d => void startStudy(d.id)} onStudy={d => void startStudy(d.id)} onToggleFavorite={toggleFavorite} favoriteBusy={favoritePending} onImages={undefined} onCreate={openCreateDeck} onDelete={deleteDeck} onDeleteImmediately={deleteDeck} onEdit={openEditDeck} onSetDailyNewLimit={setDeckDailyNewLimit} onLibrary={openDeckLibrary} onImport={(deck, file) => void startImportPreview(deck, file)} />
+                <DeckGrid emptySearch={Boolean(deckQuery)} decks={decks.filter(d => `${d.name} ${d.description}`.toLocaleLowerCase('vi').includes(deckQuery.toLocaleLowerCase('vi')))} onOpen={openDeckLibrary} onStudy={d => void startStudy(d.id)} onToggleFavorite={toggleFavorite} favoriteBusy={favoritePending} onImages={undefined} onCreate={openCreateDeck} onDelete={deleteDeck} onEdit={openEditDeck} onSetDailyNewLimit={setDeckDailyNewLimit} onLibrary={openDeckLibrary} onImport={(deck, file) => void startImportPreview(deck, file)} />
               )}
             </>
           )}
@@ -768,7 +790,7 @@ export default function App() {
                 <div className="study-layout">
                   <div className="study-progress">
                     <span>TIẾN ĐỘ PHIÊN HỌC</span>
-                    <div className="progress-track"><i style={{ width: `${Math.max(8, ((studyTotal - dueCards.length) / Math.max(1, studyTotal)) * 100)}%` }} /></div>
+                    <div className="progress-track"><i style={{ width: `${Math.max(0, ((studyTotal - dueCards.length) / Math.max(1, studyTotal)) * 100)}%` }} /></div>
                     <span>{Math.max(0, studyTotal - dueCards.length)} / {studyTotal}</span>
                   </div>
                   <StudyCard key={studyCard.id} card={studyCard} revealed={revealed} onFlip={() => setRevealed(value => !value)} />
@@ -777,8 +799,8 @@ export default function App() {
                       <div className="rating-label">Chọn thời điểm ôn lại</div>
                       <div className="rating-buttons">
                         {reviewChoices(studyCard.repetitions).map((choice, index) => (
-                          <button key={choice.label} onClick={() => void review(index)}>
-                            <span>{['Again', 'Hard', 'Good', 'Easy'][index]}</span>
+                          <button key={choice.label} disabled={reviewBusy} onClick={() => void review(index)}>
+                            <span>{['Học lại', 'Khó', 'Nhớ được', 'Dễ'][index]}</span>
                             <small>{index === 0 ? 'Đưa xuống cuối hàng đợi' : 'Ôn lại sau'}</small>
                             <b>{choice.label}</b>
                           </button>
@@ -924,9 +946,9 @@ export default function App() {
 
       {modal && (
         <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setModal(null); }}>
-          <section className="modal">
+          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="editor-title">
             <div className="modal-head">
-              <div><div className="eyebrow"><span className="eyebrow-dot" /> {modal === 'deck' ? 'THƯ VIỆN' : 'THẺ TỪ VỰNG'}</div><h2>{modal === 'deck' ? (editingDeck ? 'Chỉnh sửa bộ từ' : 'Tạo bộ từ mới') : editingCard ? 'Chỉnh sửa từ' : 'Thêm từ mới'}</h2></div>
+              <div><div className="eyebrow"><span className="eyebrow-dot" /> {modal === 'deck' ? 'THƯ VIỆN' : 'THẺ TỪ VỰNG'}</div><h2 id="editor-title">{modal === 'deck' ? (editingDeck ? 'Chỉnh sửa bộ từ' : 'Tạo bộ từ mới') : editingCard ? 'Chỉnh sửa từ' : 'Thêm từ mới'}</h2></div>
               <button className="icon-button" onClick={() => setModal(null)} aria-label="Đóng"><X size={19} /></button>
             </div>
             <form className="form-stack" onSubmit={modal === 'deck' ? saveDeck : saveCard}>
@@ -949,11 +971,11 @@ export default function App() {
                   ) : imageConfig?.configured ? (
                     <p className="image-hint"><ImagePlus size={15} /> Ảnh minh họa sẽ được tự động tìm sau khi bạn lưu từ (nếu tìm thấy).</p>
                   ) : (
-                    <div className="image-guide compact"><strong>Chưa cấu hình dịch vụ ảnh</strong><p>Thêm <code>PIXABAY_API_KEY</code>, <code>UNSPLASH_ACCESS_KEY</code> hoặc <code>PEXELS_API_KEY</code> vào <code>backend/.env</code>. Từ vẫn được tạo bình thường.</p></div>
+                    <div className="image-guide compact"><strong>Chưa cấu hình dịch vụ ảnh</strong><p>Bạn vẫn có thể lưu và học từ bình thường. Liên hệ quản trị viên nếu bạn cần ảnh minh họa.</p></div>
                   )}
                 </>
               )}
-              <div className="modal-actions"><button type="button" className="button secondary" onClick={() => setModal(null)}>Hủy</button><button className="button primary"><Plus size={16} />{modal === 'deck' ? (editingDeck ? 'Lưu thay đổi' : 'Tạo bộ từ') : editingCard ? 'Lưu thay đổi' : 'Thêm từ'}</button></div>
+              <div className="modal-actions"><button type="button" className="button secondary" onClick={() => setModal(null)}>Hủy</button><button className="button primary" disabled={saving}><Plus size={16} />{saving ? 'Đang lưu…' : modal === 'deck' ? (editingDeck ? 'Lưu thay đổi' : 'Tạo bộ từ') : editingCard ? 'Lưu thay đổi' : 'Thêm từ'}</button></div>
             </form>
           </section>
         </div>
@@ -994,8 +1016,8 @@ export default function App() {
         onCancel={() => setConfirmState(null)}
       />
 
-      {error && token && <div className="toast error-toast" role="alert" key={error}><span>{error}</span><button onClick={() => setError('')}><X size={16} /></button></div>}
-      {toast && <div className="toast" key={toast}><span>✦</span>{toast}</div>}
+      {error && token && <div className="toast error-toast" role="alert" key={error}><span>{error}</span><button aria-label="Đóng thông báo lỗi" onClick={() => setError('')}><X size={16} /></button></div>}
+      {toast && <div className="toast" role="status" key={toast}><span>✦</span>{toast}</div>}
     </div>
   );
 }

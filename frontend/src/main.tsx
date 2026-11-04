@@ -4,6 +4,7 @@ import App from './App';
 import './style.css';
 import './design.css';
 import './theme.css';
+import './notebook.css';
 import './Theme';
 
 const AdminApp = lazy(() => import('./admin/AdminApp'));

@@ -23,6 +23,7 @@ export function HighlightExample({ text, term }: { text: string; term: string })
 }
 
 type DeckGridProps = {
+  emptySearch?: boolean;
   decks: Deck[];
   onOpen: (d: Deck) => void;
   onStudy: (d: Deck) => void;
@@ -38,7 +39,7 @@ type DeckGridProps = {
   onImages?: (d: Deck) => void;
 };
 
-export function DeckGrid({ decks, onOpen, onStudy, onCreate, onDelete, onDeleteImmediately, onEdit, onSetDailyNewLimit, onLibrary, onImport, onToggleFavorite, favoriteBusy, onImages }: DeckGridProps) {
+export function DeckGrid({ emptySearch, decks, onOpen, onStudy, onCreate, onDelete, onDeleteImmediately, onEdit, onSetDailyNewLimit, onLibrary, onImport, onToggleFavorite, favoriteBusy, onImages }: DeckGridProps) {
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   const [limitDrafts, setLimitDrafts] = useState<Record<number, string>>({});
   const menuAnchorRef = useRef<HTMLButtonElement | null>(null);
@@ -59,18 +60,32 @@ export function DeckGrid({ decks, onOpen, onStudy, onCreate, onDelete, onDeleteI
       setMenuPosition({ top, left });
     };
     updatePosition();
+    menuRef.current.querySelector<HTMLElement>('input,button')?.focus();
     window.addEventListener('resize', updatePosition);
     window.addEventListener('scroll', updatePosition, true);
     return () => { window.removeEventListener('resize', updatePosition); window.removeEventListener('scroll', updatePosition, true); };
+  }, [openMenu]);
+
+  useEffect(() => {
+    if (openMenu === null) return;
+    const close = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node) && !menuAnchorRef.current?.contains(event.target as Node)) setOpenMenu(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { setOpenMenu(null); menuAnchorRef.current?.focus(); }
+    };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', escape); };
   }, [openMenu]);
 
   if (!decks.length) {
     return (
       <div className="empty-state deck-empty">
         <div>✦</div>
-        <strong>Bắt đầu với bộ từ đầu tiên</strong>
-        <p>Nhóm từ vựng theo chủ đề để việc học dễ dàng hơn.</p>
-        <button className="button primary" onClick={onCreate}><Plus size={16} /> Tạo bộ từ</button>
+        <strong>{emptySearch ? 'Không tìm thấy bộ từ' : 'Bắt đầu với bộ từ đầu tiên'}</strong>
+        <p>{emptySearch ? 'Thử tên ngắn hơn hoặc xóa tìm kiếm để xem tất cả.' : 'Nhóm từ vựng theo chủ đề để việc học dễ dàng hơn.'}</p>
+        {!emptySearch && <button className="button primary" onClick={onCreate}><Plus size={16} /> Tạo bộ từ</button>}
       </div>
     );
   }
@@ -86,7 +101,7 @@ export function DeckGrid({ decks, onOpen, onStudy, onCreate, onDelete, onDeleteI
             key={d.id}
             style={{ '--deck-color': d.color } as CSSProperties}
             tabIndex={0}
-            aria-label={`Ôn tập các từ đến hạn trong bộ ${d.name}`}
+            aria-label={`Mở thư viện bộ ${d.name}`}
             onClick={e => { if (!(e.target as HTMLElement).closest('button,label,input')) onOpen(d); }}
             onKeyDown={e => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(d); } }}
           >
@@ -125,21 +140,21 @@ export function DeckGrid({ decks, onOpen, onStudy, onCreate, onDelete, onDeleteI
                 )}
               </div>
             </div>
-            <button className="deck-name" onClick={() => onOpen(d)} title={`Ôn tập bộ ${d.name}`}>{d.name}</button>
+            <button className="deck-name" onClick={() => onOpen(d)} title={`Mở thư viện bộ ${d.name}`}>{d.name}</button>
             <p>{d.description || 'Bộ từ vựng của bạn'}</p>
             <div className="deck-card-meta">
               <span><BookOpen size={14} />{d.cardCount} từ</span>
               <span><Sparkles size={14} />{d.dueCount} đến hạn</span>
             </div>
             <div className="deck-card-bottom">
-              <div className="mini-progress"><i style={{ width: d.cardCount ? `${Math.min(100, Math.max(14, (d.cardCount - d.dueCount) / d.cardCount * 100))}%` : '0%' }} /></div>
+
               {onImport && (
                 <label className="deck-import" title={`Nhập CSV hoặc APKG vào ${d.name}`} aria-label={`Nhập file CSV hoặc APKG vào ${d.name}`}>
                   <Upload size={16} />
                   <input type="file" accept=".csv,.apkg,text/csv,application/octet-stream" onChange={e => { const file = e.currentTarget.files?.[0]; if (file) onImport(d, file); e.currentTarget.value = ''; }} />
                 </label>
               )}
-              <button className="deck-study" onClick={() => onStudy(d)} aria-label={`Ôn ${d.name}`}><ChevronRight size={17} /></button>
+              <button className="deck-study" onClick={() => onStudy(d)} aria-label={`Ôn ${d.name}`}>Ôn tập <ChevronRight size={17} /></button>
             </div>
           </article>
         ))}
@@ -147,7 +162,7 @@ export function DeckGrid({ decks, onOpen, onStudy, onCreate, onDelete, onDeleteI
       </div>
 
       {openMenu !== null && createPortal(
-        <div className="deck-menu" ref={menuRef} role="menu" style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, visibility: menuPosition.top === 0 ? 'hidden' : 'visible' }}>
+        <div className="deck-menu" ref={menuRef} role="region" aria-label="Tùy chọn bộ từ" style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, visibility: menuPosition.top === 0 ? 'hidden' : 'visible' }}>
           {(() => {
             const d = decks.find(deck => deck.id === openMenu);
             if (!d) return null;
@@ -162,10 +177,10 @@ export function DeckGrid({ decks, onOpen, onStudy, onCreate, onDelete, onDeleteI
                     <button type="submit" className="deck-limit-save"><Check size={14} /> Lưu giới hạn</button>
                   </form>
                 )}
-                {onImages && <button type="button" role="menuitem" className="deck-menu-library" onClick={() => { setOpenMenu(null); onImages(d); }}><ImagePlus size={14} /> Tìm ảnh minh họa</button>}
-                {onEdit && <button type="button" role="menuitem" className="deck-menu-library" onClick={() => { setOpenMenu(null); onEdit(d); }}><Pencil size={14} /> Sửa bộ từ</button>}
-                {onLibrary && <button type="button" role="menuitem" className="deck-menu-library" onClick={() => { setOpenMenu(null); onLibrary(d); }}><BookOpen size={14} /> Thư viện thẻ</button>}
-                {onDelete && <button type="button" role="menuitem" className="deck-menu-delete" onClick={() => { setOpenMenu(null); onDelete(d); }}><Trash2 size={14} /> Xóa thẻ</button>}
+                {onImages && <button type="button" className="deck-menu-library" onClick={() => { setOpenMenu(null); onImages(d); }}><ImagePlus size={14} /> Tìm ảnh minh họa</button>}
+                {onEdit && <button type="button" className="deck-menu-library" onClick={() => { setOpenMenu(null); onEdit(d); }}><Pencil size={14} /> Sửa bộ từ</button>}
+                {onLibrary && <button type="button" className="deck-menu-library" onClick={() => { setOpenMenu(null); onLibrary(d); }}><BookOpen size={14} /> Thư viện thẻ</button>}
+                {onDelete && <button type="button" className="deck-menu-delete" onClick={() => { setOpenMenu(null); onDelete(d); }}><Trash2 size={14} /> Xóa bộ từ</button>}
               </>
             );
           })()}

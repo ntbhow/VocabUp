@@ -24,3 +24,5 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 .review/
+
+.design-skills/
