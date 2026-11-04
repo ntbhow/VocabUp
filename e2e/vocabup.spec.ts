@@ -122,10 +122,13 @@ test('register, login, dashboard, deck/card CRUD, study, SRS, statistics and log
   await expect(page.locator('.vocab-row').filter({ hasText: studyWord })).toBeVisible();
 
   await page.getByRole('button', { name: /Ôn tập/ }).click();
-  const flashcard = page.locator('.flashcard');
+  const flashcard = page.locator('.flashcard[aria-hidden="false"]');
   await expect(flashcard).toBeVisible();
   await expect(flashcard).toContainText(studyWord);
-  await flashcard.click();
+  await page.getByRole('button', { name: 'Lật thẻ để xem đáp án', exact: true }).click();
+  await expect(page.locator('.study-front')).toHaveAttribute('aria-hidden', 'true');
+  await expect(flashcard).toHaveClass(/study-back/);
+  await expect(flashcard).toContainText('Word used for the SRS flow');
   await expect(page.locator('.rating-row')).toBeVisible();
   await page.locator('.rating-buttons button').last().click();
   await expect(page.locator('.complete-card')).toBeVisible();
